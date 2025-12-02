@@ -1,0 +1,10 @@
+customers**.json
+orders**.json
+coupons.json
+products.json
+tags.json
+categories.json
+practitioners.json
+filtered-orders.json
+**/practitioners.xlsx
+**/node_modules
