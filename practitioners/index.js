@@ -1,6 +1,7 @@
 // First install: npm install xlsx
 const XLSX = require("xlsx");
 const fs = require("fs").promises; // Use promises version of fs
+const path = require("path");
 
 async function readExcelFileNode(filePath) {
   try {
@@ -17,18 +18,20 @@ async function readExcelFileNode(filePath) {
     const rawData = XLSX.utils.sheet_to_json(worksheet);
 
     // Transform the data to the required format
-    const transformedData = rawData.map(item => {
-      const code = item.Code ? item.Code.toLowerCase() : '';
-      const email = item.Email ? item.Email.trim() : '';
-      
+    const transformedData = rawData.map((item) => {
+      const code = item.Code ? item.Code.toLowerCase() : "";
+      const email = item.Email ? item.Email.trim() : "";
+
       return {
         code: code,
         email: email,
-        description: `practitioner - ${email}`
+        description: `practitioner - ${email}`,
       };
     });
 
-    console.log(`Successfully read ${transformedData.length} rows from Excel file`);
+    console.log(
+      `Successfully read ${transformedData.length} rows from Excel file`
+    );
     return transformedData;
   } catch (error) {
     console.error("Error reading Excel file:", error);
@@ -63,7 +66,9 @@ async function processPractitioners(practitioners) {
     console.log("Starting to process practitioners.xlsx...");
 
     // Read Excel file and transform data
-    const practitioners = await readExcelFileNode("./practitioners.xlsx");
+    const practitioners = await readExcelFileNode(
+      path.join(__dirname, "practitioners.xlsx")
+    );
 
     if (practitioners.length === 0) {
       console.log("No data found or error occurred");

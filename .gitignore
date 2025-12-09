@@ -8,3 +8,5 @@ practitioners.json
 filtered-orders.json
 **/practitioners.xlsx
 **/node_modules
+**/**.json
+.env

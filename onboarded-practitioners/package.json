@@ -1,6 +1,0 @@
-{
-	"dependencies": {
-		"xlsx": "^0.18.5",
-		"fs": "0.0.1-security"
-	}
-}
