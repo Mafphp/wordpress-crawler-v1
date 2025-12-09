@@ -11,3 +11,4 @@ filtered-orders.json
 **/**.json
 !package.json
 .env
+.pnpm-store/
