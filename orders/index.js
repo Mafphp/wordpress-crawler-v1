@@ -3,18 +3,19 @@ import fs from "fs";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-dotenv.config({ debug: false });
+import pLimit from "p-limit"; // npm install p-limit
+
+dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
 const config = {
-  baseUrl: process.env.WC_BASE_URL,
+  baseUrl: process.env.WC_BASE_URL?.replace(/\/$/, ""),
   username: process.env.WC_USERNAME,
   password: process.env.WC_PASSWORD,
 };
 
-// Reusable authentication header generator
 function getAuthHeaders() {
   const { username, password } = config;
   return {
@@ -24,28 +25,22 @@ function getAuthHeaders() {
   };
 }
 
-// Generic paginated fetch function
-async function fetchAllPaginated(
+// Fetch single page with retry logic
+async function fetchPage(
   endpoint,
   fields,
-  orderBy = "date",
-  orderDirection = "asc"
+  page,
+  orderBy,
+  orderDirection,
+  retries = 3
 ) {
   const perPage = 100;
-  let allItems = [];
-  let currentPage = 1;
-  let totalPages = 1;
-
   const fieldString = Array.isArray(fields) ? fields.join(",") : fields;
-  const totalStart = performance.now(); // Track total fetch time
+  const url = `${config.baseUrl}${endpoint}?per_page=${perPage}&page=${page}&_fields=${fieldString}&orderby=${orderBy}&order=${orderDirection}`;
 
-  try {
-    do {
-      const url = `${config.baseUrl}${endpoint}?per_page=${perPage}&page=${currentPage}&_fields=${fieldString}&orderby=${orderBy}&order=${orderDirection}`;
-
-      console.log(`Fetching ${endpoint} page ${currentPage}...`);
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
       const start = performance.now();
-
       const response = await fetch(url, {
         method: "GET",
         headers: getAuthHeaders(),
@@ -53,32 +48,104 @@ async function fetchAllPaginated(
       const end = performance.now();
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        if (response.status === 429 && attempt < retries) {
+          // Rate limited - wait and retry
+          const waitTime = Math.pow(2, attempt) * 1000; // Exponential backoff
+          console.log(
+            `⚠️  Rate limited on page ${page}. Retrying in ${waitTime}ms...`
+          );
+          await new Promise((resolve) => setTimeout(resolve, waitTime));
+          continue;
+        }
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
       const items = await response.json();
-      totalPages = parseInt(response.headers.get("X-WP-TotalPages")) || 1;
+      const totalPages = parseInt(response.headers.get("X-WP-TotalPages")) || 1;
 
       console.log(
-        `Page ${currentPage}/${totalPages} - Found ${
-          items.length
-        } items - Took ${(end - start).toFixed(2)} ms`
+        `✓ Page ${page}/${totalPages} - ${items.length} items - ${(
+          end - start
+        ).toFixed(0)}ms`
       );
 
-      allItems = allItems.concat(items);
-      currentPage++;
-    } while (currentPage <= totalPages);
+      return { items, totalPages };
+    } catch (error) {
+      if (attempt === retries) {
+        console.error(`❌ Failed page ${page} after ${retries} attempts:`, error.message);
+        throw error;
+      }
+      console.log(`⚠️  Attempt ${attempt} failed for page ${page}, retrying...`);
+    }
+  }
+}
+
+// Parallel fetch with concurrency control
+async function fetchAllPaginated(
+  endpoint,
+  fields,
+  orderBy = "date",
+  orderDirection = "asc",
+  maxConcurrency = 8
+) {
+  const totalStart = performance.now();
+
+  try {
+    // Fetch first page to get total
+    console.log(`📡 Fetching first page to determine total pages...\n`);
+    const { items: firstPageItems, totalPages } = await fetchPage(
+      endpoint,
+      fields,
+      1,
+      orderBy,
+      orderDirection
+    );
+
+    if (totalPages === 1) {
+      console.log(`\n✅ Only 1 page found.`);
+      return firstPageItems;
+    }
+
+    console.log(
+      `\n📊 Total pages: ${totalPages} | Concurrency: ${maxConcurrency}\n`
+    );
+
+    // Create page numbers (2 to totalPages)
+    const pageNumbers = Array.from(
+      { length: totalPages - 1 },
+      (_, i) => i + 2
+    );
+
+    // Limit concurrency
+    const limit = pLimit(maxConcurrency);
+
+    // Fetch all pages in parallel
+    const pagePromises = pageNumbers.map((page) =>
+      limit(() => fetchPage(endpoint, fields, page, orderBy, orderDirection))
+    );
+
+    const results = await Promise.all(pagePromises);
+
+    // Combine all items
+    const allItems = [
+      ...firstPageItems,
+      ...results.flatMap((result) => result.items),
+    ];
 
     const totalEnd = performance.now();
-    console.log(
-      `\n✅ Completed! Total items fetched: ${allItems.length} — Total time: ${(
-        (totalEnd - totalStart) /
-        1000
-      ).toFixed(2)} seconds`
-    );
+    const totalTime = ((totalEnd - totalStart) / 1000).toFixed(2);
+    const itemsPerSecond = (allItems.length / (totalTime)).toFixed(0);
+
+    console.log(`\n${"=".repeat(60)}`);
+    console.log(`✅ FETCH COMPLETE`);
+    console.log(`   Total items: ${allItems.length}`);
+    console.log(`   Total time: ${totalTime}s`);
+    console.log(`   Speed: ${itemsPerSecond} items/sec`);
+    console.log(`${"=".repeat(60)}\n`);
+
     return allItems;
   } catch (error) {
-    console.error(`Error fetching ${endpoint}:`, error);
+    console.error(`\n❌ Fatal error fetching ${endpoint}:`, error.message);
     return [];
   }
 }
@@ -134,43 +201,58 @@ async function fetchAllData() {
     "wpo_wcpdf_invoice_number",
   ];
 
-  return await fetchAllPaginated("/orders", fields, "date", "asc");
+  // Adjust concurrency based on your API limits
+  // WooCommerce default: 25 requests/10sec = ~2.5 req/sec
+  // Safe: 5-8 concurrent | Aggressive: 10-15
+  return await fetchAllPaginated("/orders", fields, "date", "asc", 8);
 }
 
 function saveJSON(fileName, data) {
   try {
-    // Always inside /data folder relative to this script
     const folderPath = path.join(__dirname, "..", "data");
     const filePath = path.join(folderPath, fileName);
 
-    // Create folder if missing
     if (!fs.existsSync(folderPath)) {
       fs.mkdirSync(folderPath, { recursive: true });
     }
 
-    // Write file
+    const start = performance.now();
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
-    console.log(`✅ Saved ${fileName} in data folder.`);
+    const end = performance.now();
+
+    const sizeInMB = (fs.statSync(filePath).size / (1024 * 1024)).toFixed(2);
+    console.log(
+      `💾 Saved ${fileName} (${sizeInMB} MB) in ${(end - start).toFixed(0)}ms`
+    );
   } catch (err) {
     console.error(`❌ Failed to save ${fileName}:`, err.message);
   }
 }
 
-
-// Usage
 async function main() {
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`🚀 WooCommerce Orders Sync Started`);
+  console.log(`${"=".repeat(60)}\n`);
+
   const overallStart = performance.now();
 
   const data = await fetchAllData();
-  saveJSON("orders.json", data);
+  
+  if (data.length > 0) {
+    saveJSON("orders.json", data);
+  } else {
+    console.log(`⚠️  No data to save.`);
+  }
 
   const overallEnd = performance.now();
-  console.log(
-    `\n⏱️ Full runtime (fetch + save): ${(
-      (overallEnd - overallStart) /
-      1000
-    ).toFixed(2)} seconds.`
-  );
+  const totalRuntime = ((overallEnd - overallStart) / 1000).toFixed(2);
+
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`⏱️  TOTAL RUNTIME: ${totalRuntime} seconds`);
+  console.log(`${"=".repeat(60)}\n`);
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  console.error("\n💥 FATAL ERROR:", error);
+  process.exit(1);
+});
