@@ -9,4 +9,5 @@ filtered-orders.json
 **/practitioners.xlsx
 **/node_modules
 **/**.json
+!package.json
 .env
