@@ -1,9 +1,78 @@
-async function fetchAllCategories() {
-  const baseUrl = "http://localhost:80/wp-json/wc/v3/products/categories";
+import fetch from "node-fetch";
+import fs from "fs";
+import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
+dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Configuration
+const config = {
+  baseUrl: process.env.WC_BASE_URL,
+  username: process.env.WC_USERNAME,
+  password: process.env.WC_PASSWORD,
+};
+
+// Reusable authentication header generator
+function getAuthHeaders() {
+  const { username, password } = config;
+  return {
+    "Content-Type": "application/json",
+    Authorization:
+      "Basic " + Buffer.from(`${username}:${password}`).toString("base64"),
+  };
+}
+
+// Generic paginated fetch function
+async function fetchAllPaginated(
+  endpoint,
+  fields,
+  orderBy = "date",
+  orderDirection = "asc"
+) {
   const perPage = 100;
-  let allCategories = [];
+  let allItems = [];
   let currentPage = 1;
   let totalPages = 1;
+
+  const fieldString = Array.isArray(fields) ? fields.join(",") : fields;
+
+  try {
+    do {
+      const url = `${config.baseUrl}${endpoint}?per_page=${perPage}&page=${currentPage}&_fields=${fieldString}&orderby=${orderBy}&order=${orderDirection}`;
+
+      console.log(`Fetching ${endpoint} page ${currentPage}...`);
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: getAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const items = await response.json();
+      totalPages = parseInt(response.headers.get("X-WP-TotalPages")) || 1;
+
+      console.log(
+        `Page ${currentPage}/${totalPages} - Found ${items.length} items`
+      );
+
+      allItems = allItems.concat(items);
+      currentPage++;
+    } while (currentPage <= totalPages);
+
+    console.log(`\nCompleted! Total items fetched: ${allItems.length}`);
+    return allItems;
+  } catch (error) {
+    console.error(`Error fetching ${endpoint}:`, error);
+    return [];
+  }
+}
+
+async function fetchAllCategories() {
   const fields = [
     "id",
     "name",
@@ -14,68 +83,32 @@ async function fetchAllCategories() {
     "image",
     "menu_order",
     "count",
-  ].join(",");
+  ];
 
-  const orderBy = "name";
-  const orderDirection = "asc";
-
+  return await fetchAllPaginated("/products/categories", fields, "name", "asc");
+}
+function saveJSON(fileName, data) {
   try {
-    do {
-      // Construct the URL with pagination parameters
-      const url = `${baseUrl}?per_page=${perPage}&page=${currentPage}&_fields=${fields}&orderby=${orderBy}&order=${orderDirection}`;
+    // Always inside /data folder relative to this script
+    const folderPath = path.join(__dirname, "..", "data");
+    const filePath = path.join(folderPath, fileName);
 
-      console.log(`Fetching page ${currentPage}...`);
+    // Create folder if missing
+    if (!fs.existsSync(folderPath)) {
+      fs.mkdirSync(folderPath, { recursive: true });
+    }
 
-      // Make the API request
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          // Add your authentication headers here if needed
-          // 'Authorization': 'Basic ' + btoa('username:password')
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      // Get the response data
-      const categories = await response.json();
-
-      // Get pagination info from headers
-      const totalCategories = response.headers.get("X-WP-Total");
-      totalPages = parseInt(response.headers.get("X-WP-TotalPages")) || 1;
-
-      console.log(
-        `Page ${currentPage}/${totalPages} - Found ${categories.length} categories`
-      );
-      console.log(`Total categories: ${totalCategories}`);
-
-      // Add categories to our array
-      allCategories = allCategories.concat(categories);
-
-      // Move to next page
-      currentPage++;
-    } while (currentPage <= totalPages);
-
-    console.log(
-      `\nCompleted! Total categories fetched: ${allCategories.length}`
-    );
-
-    // Return the complete array of categories
-    return allCategories;
-  } catch (error) {
-    console.error("Error fetching categories:", error);
-    return [];
+    // Write file
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+    console.log(`✅ Saved ${fileName} in data folder.`);
+  } catch (err) {
+    console.error(`❌ Failed to save ${fileName}:`, err.message);
   }
 }
+// Usage
+async function main() {
+  const categories = await fetchAllCategories();
+  saveJSON("categories.json", categories);
+}
 
-// Usage example
-fetchAllCategories().then((categories) => {
-  // console.log("All categories:", JSON.stringify(categories, null, 2));
-
-  // You can also save to a file if running in Node.js
-  const fs = require("fs");
-  fs.writeFileSync("categories.json", JSON.stringify(categories, null, 2));
-});
+main().catch(console.error);

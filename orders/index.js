@@ -1,9 +1,78 @@
-async function fetchAllOrders() {
-  const baseUrl = "http://localhost:80/wp-json/wc/v3/orders";
+import fetch from "node-fetch";
+import fs from "fs";
+import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
+dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Configuration
+const config = {
+  baseUrl: process.env.WC_BASE_URL,
+  username: process.env.WC_USERNAME,
+  password: process.env.WC_PASSWORD,
+};
+
+// Reusable authentication header generator
+function getAuthHeaders() {
+  const { username, password } = config;
+  return {
+    "Content-Type": "application/json",
+    Authorization:
+      "Basic " + Buffer.from(`${username}:${password}`).toString("base64"),
+  };
+}
+
+// Generic paginated fetch function
+async function fetchAllPaginated(
+  endpoint,
+  fields,
+  orderBy = "date",
+  orderDirection = "asc"
+) {
   const perPage = 100;
-  let allOrders = [];
+  let allItems = [];
   let currentPage = 1;
   let totalPages = 1;
+
+  const fieldString = Array.isArray(fields) ? fields.join(",") : fields;
+
+  try {
+    do {
+      const url = `${config.baseUrl}${endpoint}?per_page=${perPage}&page=${currentPage}&_fields=${fieldString}&orderby=${orderBy}&order=${orderDirection}`;
+
+      console.log(`Fetching ${endpoint} page ${currentPage}...`);
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: getAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const items = await response.json();
+      totalPages = parseInt(response.headers.get("X-WP-TotalPages")) || 1;
+
+      console.log(
+        `Page ${currentPage}/${totalPages} - Found ${items.length} items`
+      );
+
+      allItems = allItems.concat(items);
+      currentPage++;
+    } while (currentPage <= totalPages);
+
+    console.log(`\nCompleted! Total items fetched: ${allItems.length}`);
+    return allItems;
+  } catch (error) {
+    console.error(`Error fetching ${endpoint}:`, error);
+    return [];
+  }
+}
+
+async function fetchAllData() {
   const fields = [
     "id",
     "parent_id",
@@ -52,66 +121,35 @@ async function fetchAllOrders() {
     "date_paid_gmt",
     "currency_symbol",
     "wpo_wcpdf_invoice_number",
-  ].join(",");
+  ];
 
-  const orderBy = "date";
-  const orderDirection = "asc";
+  return await fetchAllPaginated("/orders", fields, "date", "asc");
+}
 
+function saveJSON(fileName, data) {
   try {
-    do {
-      // Construct the URL with pagination parameters
-      const url = `${baseUrl}?per_page=${perPage}&page=${currentPage}&_fields=${fields}&orderby=${orderBy}&order=${orderDirection}`;
+    // Always inside /data folder relative to this script
+    const folderPath = path.join(__dirname, "..", "data");
+    const filePath = path.join(folderPath, fileName);
 
-      console.log(`Fetching page ${currentPage}...`);
+    // Create folder if missing
+    if (!fs.existsSync(folderPath)) {
+      fs.mkdirSync(folderPath, { recursive: true });
+    }
 
-      // Make the API request
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          // Add your authentication headers here if needed
-          // 'Authorization': 'Basic ' + btoa('username:password')
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      // Get the response data
-      const orders = await response.json();
-
-      // Get pagination info from headers
-      const totalOrders = response.headers.get("X-WP-Total");
-      totalPages = parseInt(response.headers.get("X-WP-TotalPages")) || 1;
-
-      console.log(
-        `Page ${currentPage}/${totalPages} - Found ${orders.length} orders`
-      );
-      console.log(`Total orders: ${totalOrders}`);
-
-      // Add orders to our array
-      allOrders = allOrders.concat(orders);
-
-      // Move to next page
-      currentPage++;
-    } while (currentPage <= totalPages);
-
-    console.log(`\nCompleted! Total orders fetched: ${allOrders.length}`);
-
-    // Return the complete array of orders
-    return allOrders;
-  } catch (error) {
-    console.error("Error fetching orders:", error);
-    return [];
+    // Write file
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+    console.log(`✅ Saved ${fileName} in data folder.`);
+  } catch (err) {
+    console.error(`❌ Failed to save ${fileName}:`, err.message);
   }
 }
 
-// Usage example
-fetchAllOrders().then((orders) => {
-  // console.log("All orders:", JSON.stringify(orders, null, 2));
 
-  // You can also save to a file if running in Node.js
-  const fs = require("fs");
-  fs.writeFileSync("orders.json", JSON.stringify(orders, null, 2));
-});
+// Usage
+async function main() {
+  const data = await fetchAllData();
+  saveJSON("orders.json", data);
+}
+
+main().catch(console.error);
