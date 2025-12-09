@@ -3,7 +3,7 @@ import fs from "fs";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-dotenv.config();
+dotenv.config({ debug: false });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -34,6 +34,7 @@ async function fetchAllPaginated(endpoint, fields, options = {}) {
   let totalPages = 1;
   
   const fieldString = Array.isArray(fields) ? fields.join(",") : fields;
+  const totalStart = performance.now(); // Track total fetch time
 
   try {
     do {
@@ -50,11 +51,13 @@ async function fetchAllPaginated(endpoint, fields, options = {}) {
       const url = `${config.baseUrl}${endpoint}?${params.toString()}`;
       
       console.log(`Fetching ${endpoint} page ${currentPage}...`);
+      const start = performance.now();
 
       const response = await fetch(url, {
         method: "GET",
         headers: getAuthHeaders(),
       });
+      const end = performance.now();
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -63,13 +66,19 @@ async function fetchAllPaginated(endpoint, fields, options = {}) {
       const items = await response.json();
       totalPages = parseInt(response.headers.get("X-WP-TotalPages")) || 1;
 
-      console.log(`Page ${currentPage}/${totalPages} - Found ${items.length} items`);
+      console.log(`Page ${currentPage}/${totalPages} - Found ${items.length} items - Took ${(end - start).toFixed(2)} ms`);
 
       allItems = allItems.concat(items);
       currentPage++;
     } while (currentPage <= totalPages);
 
-    console.log(`\nCompleted! Total items fetched: ${allItems.length}`);
+    const totalEnd = performance.now();
+    console.log(
+      `\n✅ Completed! Total items fetched: ${allItems.length} — Total time: ${(
+        (totalEnd - totalStart) /
+        1000
+      ).toFixed(2)} seconds`
+    );
     return allItems;
   } catch (error) {
     console.error(`Error fetching ${endpoint}:`, error);
@@ -127,6 +136,7 @@ async function fetchAllSubscribers() {
 // Main execution
 async function main() {
   try {
+    const overallStart = performance.now();
     // Fetch in parallel if they're independent
     const [customers, subscribers] = await Promise.all([
       fetchAllCustomers(),
@@ -148,6 +158,14 @@ async function main() {
 
     console.log(`\nSaved ${customers.length} total customers`);
     console.log(`Saved ${subscribers.length} subscribers`);
+
+    const overallEnd = performance.now();
+    console.log(
+      `\n⏱️ Full runtime (fetch + save): ${(
+        (overallEnd - overallStart) /
+        1000
+      ).toFixed(2)} seconds.`
+    );
 
   } catch (error) {
     console.error("Failed to fetch customers:", error);

@@ -3,7 +3,7 @@ import fs from "fs";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-dotenv.config();
+dotenv.config({ debug: false });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -37,17 +37,20 @@ async function fetchAllPaginated(
   let totalPages = 1;
 
   const fieldString = Array.isArray(fields) ? fields.join(",") : fields;
+  const totalStart = performance.now(); // Track total fetch time
 
   try {
     do {
       const url = `${config.baseUrl}${endpoint}?per_page=${perPage}&page=${currentPage}&_fields=${fieldString}&orderby=${orderBy}&order=${orderDirection}`;
 
       console.log(`Fetching ${endpoint} page ${currentPage}...`);
+      const start = performance.now();
 
       const response = await fetch(url, {
         method: "GET",
         headers: getAuthHeaders(),
       });
+      const end = performance.now();
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -57,14 +60,23 @@ async function fetchAllPaginated(
       totalPages = parseInt(response.headers.get("X-WP-TotalPages")) || 1;
 
       console.log(
-        `Page ${currentPage}/${totalPages} - Found ${items.length} items`
+        `Page ${currentPage}/${totalPages} - Found ${
+          items.length
+        } items - Took ${(end - start).toFixed(2)} ms`
       );
 
       allItems = allItems.concat(items);
       currentPage++;
     } while (currentPage <= totalPages);
 
-    console.log(`\nCompleted! Total items fetched: ${allItems.length}`);
+    const totalEnd = performance.now();
+    console.log(
+      `\n✅ Completed! Total items fetched: ${allItems.length} — Total time: ${(
+        (totalEnd - totalStart) /
+        1000
+      ).toFixed(2)} seconds`
+    );
+
     return allItems;
   } catch (error) {
     console.error(`Error fetching ${endpoint}:`, error);
@@ -107,8 +119,17 @@ function saveJSON(fileName, data) {
 }
 // Usage
 async function main() {
+  const overallStart = performance.now();
+
   const categories = await fetchAllCategories();
   saveJSON("categories.json", categories);
+  const overallEnd = performance.now();
+  console.log(
+    `\n⏱️ Full runtime (fetch + save): ${(
+      (overallEnd - overallStart) /
+      1000
+    ).toFixed(2)} seconds.`
+  );
 }
 
 main().catch(console.error);
