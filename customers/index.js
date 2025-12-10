@@ -3,6 +3,8 @@ import fs from "fs";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import pLimit from "p-limit"; // npm install p-limit
+
 dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,70 +30,113 @@ async function fetchAllPaginated(endpoint, fields, options = {}) {
     orderDirection = "asc",
     perPage = 100,
     additionalParams = {},
+    maxConcurrency = 8,
   } = options;
 
-  let allItems = [];
-  let currentPage = 1;
-  let totalPages = 1;
-
   const fieldString = Array.isArray(fields) ? fields.join(",") : fields;
-  const totalStart = performance.now(); // Track total fetch time
+  const totalStart = performance.now();
 
   try {
-    do {
-      // Build query parameters
-      const params = new URLSearchParams({
-        per_page: perPage,
-        page: currentPage,
-        _fields: fieldString,
-        orderby: orderBy,
-        order: orderDirection,
-        ...additionalParams, // Merge additional params
-      });
+    // Fetch page 1 to get total pages
+    const params = new URLSearchParams({
+      per_page: perPage,
+      page: 1,
+      _fields: fieldString,
+      orderby: orderBy,
+      order: orderDirection,
+      ...additionalParams,
+    });
 
-      const url = `${config.baseUrl}${endpoint}?${params.toString()}`;
+    const url = `${config.baseUrl}${endpoint}?${params.toString()}`;
+    console.log(`Fetching ${endpoint} page 1...`);
+    
+    const start = performance.now();
+    const response = await fetch(url, {
+      method: "GET",
+      headers: getAuthHeaders(),
+    });
+    const end = performance.now();
 
-      console.log(`Fetching ${endpoint} page ${currentPage}...`);
-      const start = performance.now();
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
 
-      const response = await fetch(url, {
-        method: "GET",
-        headers: getAuthHeaders(),
-      });
-      const end = performance.now();
+    const firstPageItems = await response.json();
+    const totalPages = parseInt(response.headers.get("X-WP-TotalPages")) || 1;
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+    console.log(
+      `Page 1/${totalPages} - Found ${firstPageItems.length} items - Took ${(
+        end - start
+      ).toFixed(2)} ms`
+    );
 
-      const items = await response.json();
-      totalPages = parseInt(response.headers.get("X-WP-TotalPages")) || 1;
-
+    // If only one page, return immediately
+    if (totalPages === 1) {
+      const totalEnd = performance.now();
       console.log(
-        `Page ${currentPage}/${totalPages} - Found ${
-          items.length
-        } items - Took ${(end - start).toFixed(2)} ms`
+        `\n✅ Completed! Total items fetched: ${firstPageItems.length} — Total time: ${(
+          (totalEnd - totalStart) / 1000
+        ).toFixed(2)} seconds`
       );
+      return firstPageItems;
+    }
 
-      allItems = allItems.concat(items);
-      currentPage++;
-    } while (currentPage <= totalPages);
+    // Fetch remaining pages in parallel
+    const limit = pLimit(maxConcurrency);
+    const pageNumbers = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+
+    const pagePromises = pageNumbers.map((page) =>
+      limit(async () => {
+        const pageParams = new URLSearchParams({
+          per_page: perPage,
+          page: page,
+          _fields: fieldString,
+          orderby: orderBy,
+          order: orderDirection,
+          ...additionalParams,
+        });
+
+        const pageUrl = `${config.baseUrl}${endpoint}?${pageParams.toString()}`;
+        const pageStart = performance.now();
+
+        const pageResponse = await fetch(pageUrl, {
+          method: "GET",
+          headers: getAuthHeaders(),
+        });
+        const pageEnd = performance.now();
+
+        if (!pageResponse.ok) {
+          throw new Error(`HTTP error! status: ${pageResponse.status}`);
+        }
+
+        const items = await pageResponse.json();
+        console.log(
+          `Page ${page}/${totalPages} - Found ${items.length} items - Took ${(
+            pageEnd - pageStart
+          ).toFixed(2)} ms`
+        );
+
+        return items;
+      })
+    );
+
+    const remainingPages = await Promise.all(pagePromises);
+    const allItems = [firstPageItems, ...remainingPages].flat();
 
     const totalEnd = performance.now();
     console.log(
       `\n✅ Completed! Total items fetched: ${allItems.length} — Total time: ${(
-        (totalEnd - totalStart) /
-        1000
+        (totalEnd - totalStart) / 1000
       ).toFixed(2)} seconds`
     );
+
     return allItems;
   } catch (error) {
     console.error(`Error fetching ${endpoint}:`, error);
-    throw error; // Don't swallow errors silently
+    throw error;
   }
 }
 
-// Customer field definitions
 const CUSTOMER_FIELDS = [
   "id",
   "date_created",
@@ -111,16 +156,13 @@ const CUSTOMER_FIELDS = [
 
 function saveJSON(fileName, data) {
   try {
-    // Always inside /data folder relative to this script
     const folderPath = path.join(__dirname, "..", "data");
     const filePath = path.join(folderPath, fileName);
 
-    // Create folder if missing
     if (!fs.existsSync(folderPath)) {
       fs.mkdirSync(folderPath, { recursive: true });
     }
 
-    // Write file
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
     console.log(`✅ Saved ${fileName} in data folder.`);
   } catch (err) {
@@ -128,7 +170,6 @@ function saveJSON(fileName, data) {
   }
 }
 
-// Fetch customers with optional role filter
 async function fetchCustomers(role = null) {
   const options = {
     orderBy: "registered_date",
@@ -139,7 +180,6 @@ async function fetchCustomers(role = null) {
   return await fetchAllPaginated("/customers", CUSTOMER_FIELDS, options);
 }
 
-// Convenience functions
 async function fetchAllCustomers() {
   return await fetchCustomers();
 }
@@ -148,28 +188,17 @@ async function fetchAllSubscribers() {
   return await fetchCustomers("subscriber");
 }
 
-// Main execution
 async function main() {
   try {
     const overallStart = performance.now();
-    // Fetch in parallel if they're independent
+
     const [customers, subscribers] = await Promise.all([
       fetchAllCustomers(),
       fetchAllSubscribers(),
     ]);
 
-    // Save separately with timestamps
     const timestamp = Date.now();
 
-    // saveJSON(
-    //   `customers-all-${timestamp}.json`,
-    //   customers
-    // );
-
-    // saveJSON(
-    //   `customers-subscribers-${timestamp}.json`,
-    //   subscribers
-    // );
     saveJSON(`customers.json`, [...customers, ...subscribers]);
 
     console.log(`\nSaved ${customers.length} total customers`);
@@ -178,8 +207,7 @@ async function main() {
     const overallEnd = performance.now();
     console.log(
       `\n⏱️ Full runtime (fetch + save): ${(
-        (overallEnd - overallStart) /
-        1000
+        (overallEnd - overallStart) / 1000
       ).toFixed(2)} seconds.`
     );
   } catch (error) {
