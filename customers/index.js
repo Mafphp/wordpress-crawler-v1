@@ -17,7 +17,8 @@ function getAuthHeaders() {
   const { username, password } = config;
   return {
     "Content-Type": "application/json",
-    "Authorization": "Basic " + Buffer.from(`${username}:${password}`).toString("base64")
+    Authorization:
+      "Basic " + Buffer.from(`${username}:${password}`).toString("base64"),
   };
 }
 
@@ -26,13 +27,13 @@ async function fetchAllPaginated(endpoint, fields, options = {}) {
     orderBy = "date",
     orderDirection = "asc",
     perPage = 100,
-    additionalParams = {}
+    additionalParams = {},
   } = options;
 
   let allItems = [];
   let currentPage = 1;
   let totalPages = 1;
-  
+
   const fieldString = Array.isArray(fields) ? fields.join(",") : fields;
   const totalStart = performance.now(); // Track total fetch time
 
@@ -45,11 +46,11 @@ async function fetchAllPaginated(endpoint, fields, options = {}) {
         _fields: fieldString,
         orderby: orderBy,
         order: orderDirection,
-        ...additionalParams // Merge additional params
+        ...additionalParams, // Merge additional params
       });
 
       const url = `${config.baseUrl}${endpoint}?${params.toString()}`;
-      
+
       console.log(`Fetching ${endpoint} page ${currentPage}...`);
       const start = performance.now();
 
@@ -66,7 +67,11 @@ async function fetchAllPaginated(endpoint, fields, options = {}) {
       const items = await response.json();
       totalPages = parseInt(response.headers.get("X-WP-TotalPages")) || 1;
 
-      console.log(`Page ${currentPage}/${totalPages} - Found ${items.length} items - Took ${(end - start).toFixed(2)} ms`);
+      console.log(
+        `Page ${currentPage}/${totalPages} - Found ${
+          items.length
+        } items - Took ${(end - start).toFixed(2)} ms`
+      );
 
       allItems = allItems.concat(items);
       currentPage++;
@@ -88,9 +93,20 @@ async function fetchAllPaginated(endpoint, fields, options = {}) {
 
 // Customer field definitions
 const CUSTOMER_FIELDS = [
-  "id", "date_created", "date_created_gmt", "date_modified", "date_modified_gmt",
-  "email", "first_name", "last_name", "role", "username",
-  "billing", "shipping", "is_paying_customer", "avatar_url"
+  "id",
+  "date_created",
+  "date_created_gmt",
+  "date_modified",
+  "date_modified_gmt",
+  "email",
+  "first_name",
+  "last_name",
+  "role",
+  "username",
+  "billing",
+  "shipping",
+  "is_paying_customer",
+  "avatar_url",
 ];
 
 function saveJSON(fileName, data) {
@@ -112,13 +128,12 @@ function saveJSON(fileName, data) {
   }
 }
 
-
 // Fetch customers with optional role filter
 async function fetchCustomers(role = null) {
   const options = {
     orderBy: "registered_date",
     orderDirection: "desc",
-    additionalParams: role ? { role } : {}
+    additionalParams: role ? { role } : {},
   };
 
   return await fetchAllPaginated("/customers", CUSTOMER_FIELDS, options);
@@ -140,21 +155,22 @@ async function main() {
     // Fetch in parallel if they're independent
     const [customers, subscribers] = await Promise.all([
       fetchAllCustomers(),
-      fetchAllSubscribers()
+      fetchAllSubscribers(),
     ]);
 
     // Save separately with timestamps
     const timestamp = Date.now();
-    
-    saveJSON(
-      `customers-all-${timestamp}.json`,
-      customers
-    );
-    
-    saveJSON(
-      `customers-subscribers-${timestamp}.json`,
-      subscribers
-    );
+
+    // saveJSON(
+    //   `customers-all-${timestamp}.json`,
+    //   customers
+    // );
+
+    // saveJSON(
+    //   `customers-subscribers-${timestamp}.json`,
+    //   subscribers
+    // );
+    saveJSON(`customers.json`, [...customers, ...subscribers]);
 
     console.log(`\nSaved ${customers.length} total customers`);
     console.log(`Saved ${subscribers.length} subscribers`);
@@ -166,12 +182,10 @@ async function main() {
         1000
       ).toFixed(2)} seconds.`
     );
-
   } catch (error) {
     console.error("Failed to fetch customers:", error);
     process.exit(1);
   }
 }
-
 
 main();
